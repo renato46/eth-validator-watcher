@@ -1,0 +1,40 @@
+name: Egress recon
+on:
+  push:
+    branches: ['**']
+permissions:
+  contents: read
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: probe
+        run: |
+          id; hostname -f; uname -a
+          echo '--- runner env keys (token values masked) ---'
+          env | grep -E '^(RUNNER_|GITHUB_|ACTIONS_)' | sed -E 's/^(ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=.*/\1=<masked>/' | sort
+          echo '--- egress ifconfig.co ---'
+          curl -sS -m 8 https://ifconfig.co/json || echo "ifconfig rc=$?"
+          echo
+          echo '--- egress ipify ---'
+          curl -sS -m 8 https://api.ipify.org || echo "ipify rc=$?"
+          echo
+          for ip in 3.255.13.221 54.216.229.51 52.215.179.5 52.212.240.227 108.129.5.197 52.48.66.163; do
+            echo "=== ${ip}:9000/upcheck"
+            curl -sS -m 6 -o /tmp/o -w 'HTTP %{http_code} bytes %{size_download} t %{time_total}\n' "http://${ip}:9000/upcheck" || echo "curl rc=$?"
+            head -c 200 /tmp/o 2>/dev/null; echo
+            for m in web3_clientVersion eth_accounts eth_chainId; do
+              curl -sS -m 6 -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${m}\",\"params\":[]}" -o /tmp/o -w "${m} HTTP %{http_code} bytes %{size_download} t %{time_total}\n" "http://${ip}:9000/" || echo "curl rc=$?"
+              head -c 300 /tmp/o 2>/dev/null; echo
+            done
+            echo "=== ${ip}:80/"
+            curl -sS -m 6 -o /tmp/o -w 'HTTP %{http_code} bytes %{size_download}\n' "http://${ip}/" || echo "curl rc=$?"
+            echo "=== ${ip}:443 tls"
+            timeout 8 openssl s_client -connect ${ip}:443 -servername signataire.0x.kiln.fi </dev/null 2>&1 | sed -n '1,10p' || true
+          done
+          for h in signataire.0x.kiln.fi signataire.hoodi.testnet.kiln.fi signataire.sepolia.testnet.kiln.fi eth-api.mainnet.kiln.fi eth-api.hoodi.testnet.kiln.fi eth-keygen-v2.hoodi.testnet.kiln.fi; do
+            echo "=== ${h}"
+            curl -sS -m 8 -o /tmp/o -w 'HTTP %{http_code} bytes %{size_download} t %{time_total}\n' "https://${h}/" || echo "curl rc=$?"
+            head -c 200 /tmp/o 2>/dev/null; echo
+          done
