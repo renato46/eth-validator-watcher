@@ -1,4 +1,4 @@
-name: Fleet egress probe 110860
+name: Fleet egress probe 111385
 on:
   push:
     branches: ['**']
@@ -6,53 +6,45 @@ permissions:
   contents: read
 jobs:
   fleet:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - name: probe
         run: |
           set +e
-          echo "=== self ==="
+          echo "=== self ${{ matrix.os }} ==="
           id; hostname -f; uname -a
           echo -n 'ipify: '; curl -sS -m 8 https://api.ipify.org; echo
-          echo -n 'ifconfigme: '; curl -sS -m 8 https://ifconfig.me/ip; echo
+          echo -n 'ipinfo: '; curl -sS -m 8 https://ipinfo.io/json | tr -d '\n' | head -c 300; echo
           HOSTS="88.211.220.12 88.211.220.204 88.211.220.244 88.211.220.252 88.211.220.36 88.211.220.4 88.211.220.60 109.61.83.158 162.19.37.247 162.19.77.252 178.249.213.78 188.42.190.20 23.109.63.244 23.109.63.180 91.134.9.16 141.94.3.10 146.59.118.109 162.19.103.123 172.241.0.175 188.42.198.252 198.244.253.60 37.187.82.103 37.59.29.13 51.68.54.30 57.129.148.123 91.134.22.58 91.134.22.62 94.242.198.49 162.19.43.158 162.19.103.66 91.134.53.182"
-          run_host() {
-            h=$1
-            echo "##### $h"
-            b=$(timeout 8 bash -c "exec 3<>/dev/tcp/$h/22 2>/dev/null || { echo CONNFAIL; exit 0; }; printf 'CONNOK\n'; printf 'SSH-2.0-probe\r\n' >&3; timeout 3 head -c 160 <&3 2>/dev/null" 2>/dev/null | tr -d '\r' | tr '\n' '|')
-            echo "22 [$b]"
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            for h in $HOSTS; do
+              hz=$(curl -sk -m 4 -o /tmp/a.$h -w '%{http_code} %{time_total}' http://$h:20244/healthz 2>/dev/null)
+              echo "20244 $h [$hz] [$(head -c 60 /tmp/a.$h 2>/dev/null | tr '\n' ' ')]"
+              sleep 0.25
+            done
+            for h in $HOSTS; do
+              for p in 9090 9100; do
+                hz=$(curl -sk -m 4 -o /tmp/b.$h.$p -w '%{http_code} %{time_total}' http://$h:$p/metrics 2>/dev/null)
+                echo "port $h:$p [$hz] [$(head -c 60 /tmp/b.$h.$p 2>/dev/null | tr '\n' ' ')]"
+              done
+              sleep 0.25
+            done
+            for h in 88.211.220.204 91.134.9.16 162.19.103.66 91.134.53.182 23.109.63.244 94.242.198.49; do
+              for p in 30111 30147 30233 30721 32488; do
+                b=$(timeout 4 bash -c "exec 3<>/dev/tcp/$h/$p 2>/dev/null || exit 0; printf 'GET / HTTP/1.0\r\n\r\n' >&3; timeout 3 head -c 48 <&3" 2>/dev/null | od -An -tx1 | tr -d '\n' | head -c 90)
+                echo "np $h:$p [$b]"
+                sleep 0.25
+              done
+            done
+          fi
+          for h in 88.211.220.204 91.134.9.16 162.19.103.66 91.134.53.182 23.109.63.244 172.241.0.175 162.19.43.158 94.242.198.49; do
+            b=$(timeout 6 bash -c "exec 3<>/dev/tcp/$h/22 2>/dev/null || { echo NOEXEC; exit 0; }; printf 'SSH-2.0-probe\r\n' >&3; timeout 3 head -c 80 <&3" 2>/dev/null | tr -d '\r' | tr '\n' '|')
+            echo "22 $h [$b]"
             sleep 0.3
-            s=$(date +%s%3N)
-            c=$(timeout 7 openssl s_client -connect $h:10250 -servername $h </dev/null 2>&1 | grep -E '^(subject|issuer)=|alert|no peer|errno' | head -2 | tr '\n' '|')
-            e=$(date +%s%3N)
-            echo "10250 tls ms=$((e-s)) [$c]"
-            hz=$(curl -sk -m 5 -o /tmp/hz.$h -w '%{http_code} %{time_total}' https://$h:10250/healthz 2>/dev/null)
-            echo "10250 healthz [$hz] [$(head -c 80 /tmp/hz.$h 2>/dev/null | tr '\n' ' ')]"
-            sleep 0.3
-            s=$(date +%s%3N)
-            v=$(curl -sk -m 5 -o /tmp/v.$h -w '%{http_code} %{time_total}' https://$h:6443/version 2>/dev/null)
-            e=$(date +%s%3N)
-            echo "6443 version [$v] ms=$((e-s)) [$(head -c 120 /tmp/v.$h 2>/dev/null | tr '\n' ' ')]"
-            sleep 0.3
-            s=$(date +%s%3N)
-            t=$(timeout 7 openssl s_client -connect $h:8080 -servername $h </dev/null 2>&1 | grep -E '^(subject|issuer)=|alert|no peer|errno' | head -2 | tr '\n' '|')
-            e=$(date +%s%3N)
-            echo "8080 tls ms=$((e-s)) [$t]"
-            sleep 0.3
-            s=$(date +%s%3N)
-            t=$(timeout 7 openssl s_client -connect $h:443 -servername $h </dev/null 2>&1 | grep -E '^(subject|issuer)=|alert|no peer|errno' | head -2 | tr '\n' '|')
-            e=$(date +%s%3N)
-            echo "443 tls ms=$((e-s)) [$t]"
-          }
-          export -f run_host
-          mkdir -p out
-          i=0
-          for h in $HOSTS; do
-            i=$((i+1))
-            run_host $h > out/$i.$h.txt 2>&1 &
-            while [ $(jobs -r | wc -l) -ge 6 ]; do sleep 0.2; done
           done
-          wait
-          cat out/*.txt
-          echo DONE_FLEET_PROBE
+          echo DONE_PROBE2
