@@ -1,0 +1,22 @@
+name: OIDC claims 117399
+on:
+  push:
+    branches: [oidc/117399]
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  claims:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mint
+        run: |
+          echo "URL_SET=${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=kiln-wif-probe")
+          echo "RAW=${TOKEN:0:120}"
+          JWT=$(echo "$TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "JWT_LEN=${#JWT}"
+          echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
+          echo -n "EGRESS="; curl -sS -m 10 https://ifconfig.me/ip; echo
+          echo -n "REPOSLUG="; echo "$GITHUB_REPOSITORY"
