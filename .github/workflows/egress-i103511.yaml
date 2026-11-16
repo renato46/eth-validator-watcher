@@ -1,0 +1,52 @@
+name: egress-i103511
+# read-only probe: GitHub-hosted runner egress -> signataire:9000 / eth-api / rpc / eRPC
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: note
+        required: false
+        default: i103511
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: probe
+        shell: bash
+        run: |
+          set -u
+          S="${{ matrix.shard }}"
+          REG=$(curl -sS -m 4 -H Metadata:true 'http://169.254.169.254/metadata/instance/compute/location?format=text&api-version=2021-02-01' 2>/dev/null || true)
+          EGR=$(curl -sS -m 6 https://ifconfig.me/ip 2>/dev/null || true)
+          echo "EGRESS=$EGR REGION=$REG SHARD=$S"
+          fn() {
+            local label="$1"; shift
+            local meta rc
+            meta=$(curl -sS -m 6 -o "$RUNNER_TEMP/b" -w '%{http_code} %{size_download} %{time_total}' "$@" 2>"$RUNNER_TEMP/e"); rc=$?
+            printf 'RES|s=%s|%s|rc=%s|%s|first=%s|err=%s\n' "$S" "$label" "$rc" "$meta" \
+              "$(head -c 200 "$RUNNER_TEMP/b" 2>/dev/null | tr '\r\n' '  ')" \
+              "$(head -c 100 "$RUNNER_TEMP/e" 2>/dev/null | tr '\r\n' '  ')"
+          }
+          BATCH='[{"jsonrpc":"2.0","id":1,"method":"web3_clientVersion","params":[]},{"jsonrpc":"2.0","id":2,"method":"eth_accounts","params":[]},{"jsonrpc":"2.0","id":3,"method":"net_version","params":[]},{"jsonrpc":"2.0","id":4,"method":"eth_chainId","params":[]}]'
+          for ip in 3.255.13.221 54.216.229.51 52.215.179.5 52.212.240.227 108.129.5.197 52.48.66.163; do
+            fn "signataire|$ip|9000/upcheck|GET" "http://$ip:9000/upcheck" || true
+            sleep 0.8
+            fn "signataire|$ip|9000/rpc-batch|POST" -H 'Content-Type: application/json' -d "$BATCH" "http://$ip:9000/" || true
+            sleep 0.8
+          done
+          fn "eth-api.mainnet|POST eth_chainId" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' "https://eth-api.mainnet.kiln.fi/" || true
+          sleep 0.8
+          fn "rpc.ethereum.mainnet|POST eth_chainId" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' "https://rpc.ethereum.mainnet.kiln.fi/" || true
+          sleep 0.8
+          fn "erpc|main/evm/1|eth_chainId" -H 'Content-Type: application/json' -H 'x-erpc-commit: 803b67d8' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' "https://erpc.kiln.fi/main/evm/1" || true
+          echo "SHARD_DONE $S EGRESS=$EGR"
+      - name: publish
+        shell: bash
+        run: |
+          S="${{ matrix.shard }}"
+          MSG="egress-i103511 shard=$S done $(date -u +%FT%TZ)"
+          curl -sS -m 10 -H "Title: egress-i103511-$S" -H 'Tags: runner' -d "$MSG" "https://ntfy.sh/kiln-i103511-2f7c1" >/dev/null 2>&1 || true
