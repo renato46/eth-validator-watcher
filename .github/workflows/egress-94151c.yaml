@@ -1,0 +1,17 @@
+name: egress-94151c
+on:
+  push:
+    branches:
+      - "probe/egress-94151c"
+permissions:
+  contents: read
+jobs:
+  probe3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: run probe3
+        run: |
+          python3 -u probe3.py || true
+          echo "PROBE3_DONE rc=$?"
